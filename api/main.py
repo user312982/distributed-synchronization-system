@@ -49,11 +49,26 @@ if os.path.exists("dashboard"):
     app.mount("/dashboard", StaticFiles(directory="dashboard", html=True), name="dashboard")
 
 # ── Node Configuration ────────────────────────────────────────────────────────
+# Lock nodes (Raft/PBFT)
 NODE_ADDRESSES = {
-    "node1": os.getenv("NODE1_ADDR", "node1:8001"),
-    "node2": os.getenv("NODE2_ADDR", "node2:8002"),
-    "node3": os.getenv("NODE3_ADDR", "node3:8003"),
-    "node4": os.getenv("NODE4_ADDR", "node4:8004"),
+    "node1": os.getenv("NODE1_ADDR", "lock-node1:8001"),
+    "node2": os.getenv("NODE2_ADDR", "lock-node2:8001"),
+    "node3": os.getenv("NODE3_ADDR", "lock-node3:8001"),
+    "node4": os.getenv("NODE4_ADDR", "lock-node4:8001"),
+}
+
+# Queue nodes (Consistent Hashing)
+QUEUE_ADDRESSES = {
+    "node1": os.getenv("QUEUE_NODE1_ADDR", "queue-node1:8001"),
+    "node2": os.getenv("QUEUE_NODE2_ADDR", "queue-node2:8001"),
+    "node3": os.getenv("QUEUE_NODE3_ADDR", "queue-node3:8001"),
+}
+
+# Cache nodes (MESI)
+CACHE_ADDRESSES = {
+    "node1": os.getenv("CACHE_NODE1_ADDR", "cache-node1:8001"),
+    "node2": os.getenv("CACHE_NODE2_ADDR", "cache-node2:8001"),
+    "node3": os.getenv("CACHE_NODE3_ADDR", "cache-node3:8001"),
 }
 
 
@@ -72,6 +87,16 @@ async def _post(node_addr: str, path: str, body: Dict) -> Optional[Dict]:
     async with httpx.AsyncClient(timeout=10.0) as client:
         try:
             r = await client.post(url, json=body)
+            return r.json()
+        except Exception:
+            return None
+
+
+async def _put(node_addr: str, path: str, body: Dict) -> Optional[Dict]:
+    url = f"http://{node_addr}{path}"
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        try:
+            r = await client.put(url, json=body)
             return r.json()
         except Exception:
             return None
@@ -261,47 +286,47 @@ async def enqueue(req: EnqueueRequest):
     Enqueue a message. The system automatically routes to the correct node
     based on consistent hashing of the queue name.
     """
-    addr = NODE_ADDRESSES.get(req.node)
+    addr = QUEUE_ADDRESSES.get(req.node)
     if not addr:
-        raise HTTPException(404, f"Unknown node: {req.node}")
+        raise HTTPException(404, f"Unknown queue node: {req.node}")
     result = await _post(addr, "/queue/enqueue", req.model_dump(exclude={"node"}))
     if not result:
-        raise HTTPException(503, "Node unreachable")
+        raise HTTPException(503, "Queue node unreachable")
     return result
 
 
 @app.post("/queue/dequeue", tags=["Queue"], summary="Dequeue a message")
 async def dequeue(req: DequeueRequest):
     """Dequeue next message. Message moves to in-flight state until ACK'd."""
-    addr = NODE_ADDRESSES.get(req.node)
+    addr = QUEUE_ADDRESSES.get(req.node)
     if not addr:
-        raise HTTPException(404, f"Unknown node: {req.node}")
+        raise HTTPException(404, f"Unknown queue node: {req.node}")
     result = await _post(addr, "/queue/dequeue", req.model_dump(exclude={"node"}))
     if not result:
-        raise HTTPException(503, "Node unreachable")
+        raise HTTPException(503, "Queue node unreachable")
     return result
 
 
 @app.post("/queue/ack", tags=["Queue"], summary="Acknowledge message delivery")
 async def ack_message(req: AckRequest):
     """ACK a message to remove it from the in-flight list and persistence store."""
-    addr = NODE_ADDRESSES.get(req.node)
+    addr = QUEUE_ADDRESSES.get(req.node)
     if not addr:
-        raise HTTPException(404, f"Unknown node: {req.node}")
+        raise HTTPException(404, f"Unknown queue node: {req.node}")
     result = await _post(addr, "/queue/ack", req.model_dump(exclude={"node"}))
     if not result:
-        raise HTTPException(503, "Node unreachable")
+        raise HTTPException(503, "Queue node unreachable")
     return result
 
 
 @app.get("/queue/stats", tags=["Queue"], summary="Queue statistics")
 async def queue_stats(node: str = Query("node1")):
-    addr = NODE_ADDRESSES.get(node)
+    addr = QUEUE_ADDRESSES.get(node)
     if not addr:
-        raise HTTPException(404, f"Unknown node: {node}")
+        raise HTTPException(404, f"Unknown queue node: {node}")
     result = await _get(addr, "/queue/stats")
     if not result:
-        raise HTTPException(503, "Node unreachable")
+        raise HTTPException(503, "Queue node unreachable")
     return result
 
 
@@ -313,12 +338,12 @@ async def cache_read(key: str, node: str = Query("node1")):
     Read a key from the cache. Implements MESI read protocol:
     hit returns from local cache, miss fetches and sets E or S state.
     """
-    addr = NODE_ADDRESSES.get(node)
+    addr = CACHE_ADDRESSES.get(node)
     if not addr:
-        raise HTTPException(404, f"Unknown node: {node}")
+        raise HTTPException(404, f"Unknown cache node: {node}")
     result = await _get(addr, f"/cache/{key}")
     if not result:
-        raise HTTPException(503, "Node unreachable")
+        raise HTTPException(503, "Cache node unreachable")
     return result
 
 
@@ -328,20 +353,20 @@ async def cache_write(key: str, req: CacheWriteRequest):
     Write a key. Triggers MESI write protocol:
     broadcasts Invalidate to all peers, then sets M state locally.
     """
-    addr = NODE_ADDRESSES.get(req.node)
+    addr = CACHE_ADDRESSES.get(req.node)
     if not addr:
-        raise HTTPException(404, f"Unknown node: {req.node}")
-    result = await _post(addr, f"/cache/{key}", {"value": req.value})
+        raise HTTPException(404, f"Unknown cache node: {req.node}")
+    result = await _put(addr, f"/cache/{key}", {"value": req.value})
     if not result:
-        raise HTTPException(503, "Node unreachable")
+        raise HTTPException(503, "Cache node unreachable")
     return result
 
 
 @app.delete("/cache/{key}", tags=["Cache"], summary="Invalidate cache key")
 async def cache_invalidate(key: str, node: str = Query("node1")):
-    addr = NODE_ADDRESSES.get(node)
+    addr = CACHE_ADDRESSES.get(node)
     if not addr:
-        raise HTTPException(404, f"Unknown node: {node}")
+        raise HTTPException(404, f"Unknown cache node: {node}")
     async with httpx.AsyncClient(timeout=5.0) as client:
         r = await client.delete(f"http://{addr}/cache/{key}")
         return r.json()
@@ -349,12 +374,12 @@ async def cache_invalidate(key: str, node: str = Query("node1")):
 
 @app.get("/cache/snapshot/all", tags=["Cache"], summary="Get cache snapshot from a node")
 async def cache_snapshot(node: str = Query("node1")):
-    addr = NODE_ADDRESSES.get(node)
+    addr = CACHE_ADDRESSES.get(node)
     if not addr:
-        raise HTTPException(404, f"Unknown node: {node}")
+        raise HTTPException(404, f"Unknown cache node: {node}")
     result = await _get(addr, "/cache/snapshot/all")
     if not result:
-        raise HTTPException(503, "Node unreachable")
+        raise HTTPException(503, "Cache node unreachable")
     return result
 
 

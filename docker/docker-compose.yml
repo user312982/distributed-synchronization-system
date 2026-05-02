@@ -306,10 +306,19 @@ services:
     container_name: dist-api
     networks: [dist-net]
     environment:
+      # Lock nodes (Raft/PBFT)
       NODE1_ADDR: "lock-node1:8001"
       NODE2_ADDR: "lock-node2:8001"
       NODE3_ADDR: "lock-node3:8001"
       NODE4_ADDR: "lock-node4:8001"
+      # Queue nodes (Consistent Hashing)
+      QUEUE_NODE1_ADDR: "queue-node1:8001"
+      QUEUE_NODE2_ADDR: "queue-node2:8001"
+      QUEUE_NODE3_ADDR: "queue-node3:8001"
+      # Cache nodes (MESI)
+      CACHE_NODE1_ADDR: "cache-node1:8001"
+      CACHE_NODE2_ADDR: "cache-node2:8001"
+      CACHE_NODE3_ADDR: "cache-node3:8001"
     ports:
       - "8000:8000"
     depends_on:
@@ -317,6 +326,12 @@ services:
       - lock-node2
       - lock-node3
       - lock-node4
+      - queue-node1
+      - queue-node2
+      - queue-node3
+      - cache-node1
+      - cache-node2
+      - cache-node3
     restart: unless-stopped
 
   # ── Prometheus ─────────────────────────────────────────────────────────────
