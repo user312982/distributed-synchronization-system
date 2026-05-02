@@ -2,96 +2,166 @@
 
 ## Gambaran Umum
 
-Sistem ini mengimplementasikan tiga komponen sinkronisasi terdistribusi yang berjalan dalam Docker cluster:
+Sistem mengimplementasikan tiga komponen sinkronisasi terdistribusi yang berjalan dalam Docker cluster dengan total 14 container:
 
-1. **Distributed Lock Manager** — berbasis algoritma Raft Consensus
-2. **Distributed Queue** — berbasis Consistent Hashing
-3. **Distributed Cache Coherence** — protokol MESI
-
----
-
-## Diagram Arsitektur
-
-```
-┌────────────────────────────────────────────────────────────────┐
-│                       Docker Compose Network                    │
-│                                                                │
-│  ┌──────────────────────────────────────────────────────────┐  │
-│  │                   REST API Gateway (FastAPI :8000)        │  │
-│  │              Swagger UI: http://localhost:8000/docs       │  │
-│  └──────────────────────────────────────────────────────────┘  │
-│                              │                                  │
-│           ┌──────────────────┼──────────────────┐              │
-│           ▼                  ▼                  ▼              │
-│  ┌─────────────────┐ ┌─────────────┐ ┌──────────────────┐     │
-│  │  Lock Nodes     │ │ Queue Nodes │ │  Cache Nodes     │     │
-│  │                 │ │             │ │                  │     │
-│  │ lock-node1:8001 │ │queue-node1  │ │ cache-node1:8001 │     │
-│  │ lock-node2:8001 │ │queue-node2  │ │ cache-node2:8001 │     │
-│  │ lock-node3:8001 │ │queue-node3  │ │ cache-node3:8001 │     │
-│  │                 │ │             │ │                  │     │
-│  │ [Raft Consensus]│ │[Cons. Hash] │ │  [MESI Protocol] │     │
-│  └────────┬────────┘ └──────┬──────┘ └────────┬─────────┘     │
-│           └────────────────┬┘────────────────┘               │
-│                            │                                   │
-│                    ┌───────▼───────┐                          │
-│                    │  Redis :6379  │                          │
-│                    │ (persistence) │                          │
-│                    └───────────────┘                          │
-│                                                                │
-│  ┌──────────────────┐    ┌──────────────────────────────────┐ │
-│  │ Prometheus :9090 │    │        Grafana :3000             │ │
-│  │ (metrics store)  │◄───│     (visualization dashboard)    │ │
-│  └──────────────────┘    └──────────────────────────────────┘ │
-└────────────────────────────────────────────────────────────────┘
-```
+| Komponen | Algoritma | Nodes | Poin |
+|---|---|---|---|
+| Distributed Lock Manager | Raft Consensus + PBFT | 4 | 25 |
+| Distributed Queue | Consistent Hashing | 3 | 20 |
+| Distributed Cache Coherence | MESI Protocol | 3 | 15 |
+| Containerization | Docker Compose | — | 10 |
 
 ---
 
-## Komponen A: Distributed Lock Manager (Raft)
+## Diagram Arsitektur Keseluruhan
 
-### Algoritma Raft
+```mermaid
+graph TB
+    Client(["👤 Client / Browser"])
 
-Raft dibagi menjadi tiga fase utama:
+    subgraph API["REST API Gateway :8000"]
+        FastAPI["FastAPI + Swagger UI\n/docs • /health • /status"]
+    end
 
-#### 1. Leader Election
-- Setiap node mulai sebagai **Follower** dengan randomized election timeout (150–300ms)
-- Jika tidak menerima heartbeat dalam timeout, node menjadi **Candidate**
-- Candidate menaikkan term, vote untuk diri sendiri, dan kirim `RequestVote` ke peers
-- Node menjadi **Leader** jika mendapat suara majority (n/2 + 1)
+    subgraph LockCluster["🔐 Lock Manager Cluster (Raft + PBFT)"]
+        LN1["lock-node1\n:8101\n[LEADER]"]
+        LN2["lock-node2\n:8102\n[FOLLOWER]"]
+        LN3["lock-node3\n:8103\n[FOLLOWER]"]
+        LN4["lock-node4\n:8104\n[BYZANTINE 🦹]"]
+    end
 
+    subgraph QueueCluster["📦 Queue Cluster (Consistent Hashing)"]
+        QN1["queue-node1\n:8201"]
+        QN2["queue-node2\n:8202"]
+        QN3["queue-node3\n:8203"]
+    end
+
+    subgraph CacheCluster["🗄️ Cache Cluster (MESI Protocol)"]
+        CN1["cache-node1\n:8301"]
+        CN2["cache-node2\n:8302"]
+        CN3["cache-node3\n:8303"]
+    end
+
+    subgraph Infra["🏗️ Infrastructure"]
+        Redis[("Redis :6379\nPersistence")]
+        Prom["Prometheus :9090\nMetrics Store"]
+        Grafana["Grafana :3000\nDashboard"]
+    end
+
+    Client -->|HTTP REST| FastAPI
+    FastAPI -->|RPC| LN1
+    FastAPI -->|RPC| LN2
+    FastAPI -->|RPC| LN3
+    FastAPI -->|RPC| LN4
+
+    LN1 <-->|Raft AppendEntries\nRequestVote| LN2
+    LN1 <-->|Raft AppendEntries\nRequestVote| LN3
+    LN1 <-->|Raft AppendEntries\nRequestVote| LN4
+    LN2 <-->|Raft| LN3
+    LN2 <-->|Raft| LN4
+    LN3 <-->|Raft| LN4
+
+    QN1 <-->|queue_enqueue RPC| QN2
+    QN1 <-->|queue_enqueue RPC| QN3
+    QN2 <-->|queue_enqueue RPC| QN3
+
+    CN1 <-->|cache_invalidate\ncache_check| CN2
+    CN1 <-->|cache_invalidate\ncache_check| CN3
+    CN2 <-->|cache_invalidate\ncache_check| CN3
+
+    LN1 & LN2 & LN3 & LN4 -->|Persist| Redis
+    QN1 & QN2 & QN3 -->|Persist| Redis
+
+    LN1 & LN2 & LN3 & LN4 -->|Metrics :9090| Prom
+    QN1 & QN2 & QN3 -->|Metrics :9090| Prom
+    CN1 & CN2 & CN3 -->|Metrics :9090| Prom
+    Prom -->|Query| Grafana
 ```
-Follower ──(timeout)──► Candidate ──(majority votes)──► Leader
-    ▲                        │                              │
-    └────────────────────────┘◄─────────────────────────────┘
-         (higher term discovered)        (heartbeats)
+
+---
+
+## Komponen A: Distributed Lock Manager (Raft Consensus)
+
+### State Machine Raft
+
+```mermaid
+stateDiagram-v2
+    [*] --> Follower : Start
+
+    Follower --> Candidate : Election timeout\n(150–300ms random)
+    Candidate --> Follower : Menemukan term lebih tinggi\natau menerima AppendEntries
+    Candidate --> Candidate : Split vote\n(restart election)
+    Candidate --> Leader : Mendapat majority votes\n(n/2 + 1)
+    Leader --> Follower : Menemukan term lebih tinggi\n(step down)
+
+    state Follower {
+        [*] --> WaitHeartbeat
+        WaitHeartbeat --> ResetTimer : AppendEntries diterima
+        WaitHeartbeat --> [*] : Timeout → menjadi Candidate
+    }
+
+    state Leader {
+        [*] --> SendHeartbeat
+        SendHeartbeat --> ReplicateLog : Ada command baru
+        ReplicateLog --> CommitIfMajority : Majority ACK
+        CommitIfMajority --> SendHeartbeat
+    }
 ```
 
-#### 2. Log Replication
-- Leader menerima command dan append ke log lokal
-- Leader kirim `AppendEntries` ke semua followers
-- Entry di-commit setelah majority menerima (acknowledged)
-- Leader kirim `commit_index` ke followers via heartbeat
+### Alur Log Replication
 
-#### 3. Safety Properties
-- **Election Safety**: Max 1 leader per term
-- **Log Matching**: Jika dua log memiliki entry dengan index dan term sama, log identik hingga index tersebut
-- **Leader Completeness**: Leader selalu punya semua committed entries
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant L as Leader (node1)
+    participant F1 as Follower (node2)
+    participant F2 as Follower (node3)
 
-### Lock Types
+    C->>L: submit(command)
+    L->>L: Append to local log [index=N]
+    L->>F1: AppendEntries(term, entries, commitIdx)
+    L->>F2: AppendEntries(term, entries, commitIdx)
+    F1-->>L: {success: true}
+    F2-->>L: {success: true}
+    Note over L: Majority ACK (2/2 followers) → COMMIT
+    L->>L: advance commit_index = N
+    L-->>C: return True (committed)
+    L->>F1: Next heartbeat (commitIdx=N)
+    L->>F2: Next heartbeat (commitIdx=N)
+    F1->>F1: Apply entry to state machine
+    F2->>F2: Apply entry to state machine
+```
 
-| Type | Kompatibilitas |
-|------|---------------|
-| SHARED (READ) | Compatible dengan SHARED lainnya |
-| EXCLUSIVE (WRITE) | Tidak compatible dengan apapun |
+### Deadlock Detection — Wait-For Graph
 
-### Deadlock Detection
+```mermaid
+graph LR
+    T1(["Txn T1\nwaiting for R2"]) -->|waits| T2(["Txn T2\nwaiting for R3"])
+    T2 -->|waits| T3(["Txn T3\nwaiting for R1"])
+    T3 -->|waits| T1
 
-Menggunakan **Wait-For Graph** dengan DFS cycle detection:
-1. Saat transaksi T1 menunggu T2 → tambah edge T1→T2
-2. Jalankan DFS setiap kali edge baru ditambahkan
-3. Jika cycle ditemukan → pilih victim (transaksi termuda = timestamp terbesar)
-4. Abort victim, release semua lock-nya
+    style T1 fill:#ff6b6b,color:#fff
+    style T2 fill:#ff6b6b,color:#fff
+    style T3 fill:#ff6b6b,color:#fff
+
+    Victim(["🗑️ Victim: T3\n(youngest timestamp)\nAbort → release R1"])
+    T3 -.->|DFS detects cycle\n→ abort| Victim
+```
+
+### Lock Compatibility Matrix
+
+```mermaid
+graph LR
+    subgraph Locks["Lock Compatibility"]
+        S1["SHARED\n(T1)"]
+        S2["SHARED\n(T2)"]
+        E1["EXCLUSIVE\n(T3)"]
+
+        S1 ---|✅ Compatible| S2
+        S1 ---|❌ Conflict| E1
+        S2 ---|❌ Conflict| E1
+    end
+```
 
 ---
 
@@ -99,114 +169,236 @@ Menggunakan **Wait-For Graph** dengan DFS cycle detection:
 
 ### Consistent Hash Ring
 
-```
-         0
-    ┌────────────────────┐
-    │    Virtual Ring    │
-    │                    │
-  270──────node2──────90 │
-    │                    │
-  180──────node1─────────┘
-         node3
+```mermaid
+graph TD
+    subgraph Ring["Hash Ring (MD5, 150 virtual nodes per node)"]
+        direction LR
+        H0["0"] --> H90["90"]
+        H90 --> H180["180"]
+        H180 --> H270["270"]
+        H270 --> H360["360 = 0"]
+
+        QN1L["queue-node1\nvnodes 0–149"] -. "mapped to" .-> H90
+        QN2L["queue-node2\nvnodes 150–299"] -. "mapped to" .-> H180
+        QN3L["queue-node3\nvnodes 300–449"] -. "mapped to" .-> H270
+    end
+
+    Key["queue_name: 'orders'"] -->|MD5 hash| Ring
+    Ring -->|Route to responsible node| QN1L
 ```
 
-- **Virtual Nodes**: 150 per node untuk distribusi uniform
-- **Key Routing**: `MD5(queue_name)` → temukan node di ring
-- **Node Join/Leave**: Rehash hanya O(K/N) keys (K=total keys, N=nodes)
+### Alur At-Least-Once Delivery
 
-### At-Least-Once Delivery
+```mermaid
+sequenceDiagram
+    participant P as Producer
+    participant QN as Queue Node
+    participant R as Redis
+    participant C as Consumer
 
-```
-Producer → Enqueue → Persist to Redis → Add to Queue
-                           ↓
-Consumer ← Dequeue ← Move to In-Flight
-                           ↓
-              ┌────────────────────────┐
-              │ Consumer ACK?          │
-              │  YES → Delete Redis    │
-              │  NO (timeout) → Re-enqueue (front)
-              └────────────────────────┘
-              (Max retry = 5, then DLQ)
+    P->>QN: enqueue(queue, body)
+    QN->>R: SET queue:{node}:{queue}:{msg_id} (persist first)
+    R-->>QN: OK
+    QN->>QN: Append to in-memory queue
+    QN-->>P: {status: "ok", msg_id: "uuid"}
+
+    C->>QN: dequeue(queue, consumer_id)
+    QN->>QN: Pop from queue → move to in-flight
+    QN-->>C: {msg_id, body, delivery_count}
+
+    alt Consumer ACK dalam timeout
+        C->>QN: ack(queue, msg_id)
+        QN->>R: DEL queue:{node}:{queue}:{msg_id}
+        QN-->>C: {status: "acked"}
+    else Timeout (delivery_timeout detik)
+        Note over QN: Redelivery loop detects timeout
+        QN->>QN: Re-insert to front of queue
+        Note over QN: delivery_count++\nmax_retry = 5
+    else Max retry exceeded
+        QN->>QN: Move to Dead Letter Queue
+        QN->>R: DEL (remove from persistence)
+    end
 ```
 
 ### Recovery dari Node Failure
 
-Saat node restart:
-1. Baca semua keys `queue:{node_id}:*` dari Redis
-2. Reconstruct in-memory queue dari persisted messages
-3. Messages yang belum di-ACK akan kembali available untuk consumers
+```mermaid
+flowchart TD
+    A["Node Crash 💥"] --> B["Node Restart"]
+    B --> C["on_start() dipanggil"]
+    C --> D["Redis KEYS queue:{node_id}:*"]
+    D --> E{Ada persisted messages?}
+    E -->|Ya| F["Reconstruct in-memory queue\ndari setiap Redis key"]
+    F --> G["Messages tersedia\nuntuk consumers kembali ✅"]
+    E -->|Tidak| H["Queue kosong,\nsiap menerima pesan baru"]
+    G --> I["Start redelivery loop"]
+    H --> I
+```
 
 ---
 
-## Komponen C: Cache Coherence (MESI)
+## Komponen C: Cache Coherence (MESI Protocol)
 
-### State Transitions
+### State Transitions MESI
 
-```
-                    ┌─────────────────────────┐
-                    │    Read Miss (no peers)  │
-             ┌──────▼──────┐                  │
-   Write Hit │     E       │──Write Hit───►  M│
-    (E→M)    │  (Exclusive)│                  │
-             └──────┬──────┘        ┌─────────┴──────┐
-                    │               │       M        │
-          Peer Reads│               │   (Modified)   │
-                    ▼               └───────┬────────┘
-             ┌──────────────┐              │
-             │      S       │◄─────────────┘
-             │   (Shared)   │   Write-back on eviction
-             └──────┬───────┘
-                    │ Invalidate received
-                    ▼
-             ┌──────────────┐
-             │      I       │
-             │   (Invalid)  │
-             └──────────────┘
+```mermaid
+stateDiagram-v2
+    [*] --> I : Initial state
+
+    I --> E : Read Miss\n(no peers have copy)\nFetch from backing store
+    I --> S : Read Miss\n(peer has copy)
+    I --> M : Write Miss\nBroadcast Invalidate\nFetch & write locally
+
+    E --> M : Write Hit\n(upgrade: E→M)
+    E --> S : Peer reads same key\n(E→S via bus snooping)
+    E --> I : Invalidate received
+
+    S --> M : Write Hit\nBroadcast Invalidate to all peers\n(S→M)
+    S --> I : Invalidate received from writer
+
+    M --> M : Write Hit\n(already exclusive)
+    M --> S : Write-back on eviction\n(optional)
+    M --> I : Invalidate received
 ```
 
-### Protocol Rules
+### Alur Write Protocol (S→M)
 
-| Operation | State | Action |
-|-----------|-------|--------|
-| Read Hit | M/E/S | Serve from cache |
-| Read Miss | I | Fetch from memory, set E (no peers) or S (peers have copy) |
-| Write Hit | M | Update locally, stay M |
-| Write Hit | E | Update locally, E→M |
-| Write Hit | S | Broadcast Invalidate to peers, S→M |
-| Write Miss | I | Broadcast Invalidate, fetch, set M |
+```mermaid
+sequenceDiagram
+    participant C1 as cache-node1 (state=S)
+    participant C2 as cache-node2 (state=S)
+    participant C3 as cache-node3 (state=S)
+    participant BS as Backing Store (Redis)
 
-### LRU Replacement Policy
+    Note over C1,C3: Semua node punya key "user:1" dalam state S
 
-Implementasi O(1) menggunakan **OrderedDict**:
-- `get(key)`: ambil value, move ke end (most recently used)
-- `put(key)`: jika full, remove first item (least recently used)
+    C1->>C2: cache_invalidate {key: "user:1"}
+    C1->>C3: cache_invalidate {key: "user:1"}
+    C2-->>C1: {status: "invalidated"}
+    C3-->>C1: {status: "invalidated"}
+
+    C2->>C2: state[user:1] = I (Invalid)
+    C3->>C3: state[user:1] = I (Invalid)
+
+    C1->>BS: Write new value
+    C1->>C1: state[user:1] = M (Modified)
+    Note over C1: Exclusive ownership ✅
+```
+
+### LRU Cache Implementation
+
+```mermaid
+graph LR
+    subgraph OrderedDict["OrderedDict (O(1) LRU)"]
+        direction LR
+        LRU["LRU\n(first / oldest)"] --> K2["key2"] --> K3["key3"] --> MRU["MRU\n(last / newest)"]
+    end
+
+    Get["get(key3)\n→ move to end"] -->|access| OrderedDict
+    Put["put(keyNew)\ncapacity full\n→ evict LRU"] -->|evict 'LRU', add 'keyNew'| OrderedDict
+```
 
 ---
 
-## Monitoring & Metrics
+## Bonus: PBFT Byzantine Fault Tolerance
 
-### Prometheus Metrics
+### Fase PBFT (3-Phase Protocol)
 
-| Metric | Deskripsi |
-|--------|-----------|
-| `raft_current_term` | Current Raft term |
-| `raft_node_role` | 0=Follower, 1=Candidate, 2=Leader |
-| `lock_acquire_total` | Lock acquisitions by type and status |
-| `lock_wait_seconds` | Histogram of lock wait times |
-| `deadlock_detected_total` | Total deadlocks detected |
-| `queue_depth` | Current queue depth per queue per node |
-| `queue_message_latency_seconds` | End-to-end message latency |
-| `cache_hits_total` | Cache hits |
-| `cache_misses_total` | Cache misses |
-| `cache_state_transitions_total` | MESI state transitions |
-| `cache_evictions_total` | LRU evictions |
+```mermaid
+sequenceDiagram
+    participant P as Primary (node1)
+    participant R1 as Replica (node2) ✅
+    participant R2 as Replica (node3) ✅
+    participant BYZ as Byzantine (node4) 🦹
 
-### Grafana Dashboards
+    Note over P,BYZ: Phase 1: PRE-PREPARE
+    P->>R1: PRE-PREPARE {view, seq, digest, command}
+    P->>R2: PRE-PREPARE {view, seq, digest, command}
+    P->>BYZ: PRE-PREPARE {view, seq, digest, command}
 
-Akses: `http://localhost:3000` (admin/admin123)
+    Note over P,BYZ: Phase 2: PREPARE
+    R1->>P: PREPARE {view, seq, digest}
+    R1->>R2: PREPARE {view, seq, digest}
+    R1->>BYZ: PREPARE {view, seq, digest}
+    R2->>P: PREPARE {view, seq, digest}
+    R2->>R1: PREPARE {view, seq, digest}
+    R2->>BYZ: PREPARE {view, seq, digest}
+    BYZ->>P: PREPARE {view, seq, BAD_DIGEST} ❌
+    BYZ->>R1: PREPARE {view, seq, BAD_DIGEST} ❌
+    BYZ->>R2: ⬛ DROP (silent) ❌
 
-Pre-built panels:
-1. Raft Cluster Status (leader election rate, term progression)
-2. Lock Manager (acquire rate, wait time, deadlock count)
-3. Queue Throughput (enqueue/dequeue rate, queue depth, latency)
-4. Cache Performance (hit rate, miss rate, state distribution)
+    Note over P,R2: 2f valid PREPAREs received (2f=2) → PREPARED ✅
+
+    Note over P,BYZ: Phase 3: COMMIT
+    P->>R1: COMMIT {view, seq, digest}
+    P->>R2: COMMIT {view, seq, digest}
+    R1->>P: COMMIT
+    R1->>R2: COMMIT
+    R2->>P: COMMIT
+    R2->>R1: COMMIT
+    BYZ->>P: COMMIT {BAD_DIGEST} ❌
+
+    Note over P,R2: 2f+1 valid COMMITs (3) → EXECUTE ✅
+    Note over BYZ: Byzantine node tidak bisa corrupt consensus\nkarena f=1 < (N-1)/3 = 1 ✓
+```
+
+### Toleransi Byzantine
+
+```mermaid
+graph LR
+    subgraph Cluster["N=4 nodes, f=1"]
+        H1["node1 ✅\nHonest"]
+        H2["node2 ✅\nHonest"]
+        H3["node3 ✅\nHonest"]
+        BYZ["node4 🦹\nByzantine\nIS_MALICIOUS=true"]
+    end
+
+    Formula["f = ⌊(N-1)/3⌋ = ⌊3/3⌋ = 1\nToleran terhadap 1 Byzantine node\nCommit butuh 2f+1 = 3 valid commits"]
+
+    Cluster --- Formula
+```
+
+---
+
+## Monitoring Stack
+
+```mermaid
+graph LR
+    subgraph Nodes["All Nodes (port :9090)"]
+        M1["lock-node1..4\nRaft metrics\nLock metrics"]
+        M2["queue-node1..3\nQueue metrics"]
+        M3["cache-node1..3\nMESI metrics"]
+    end
+
+    subgraph Monitoring["Monitoring Stack"]
+        Prom["Prometheus :9090\nScrape interval: 15s\nTime-series DB"]
+        Graf["Grafana :3000\nDashboard\nadmin/admin123"]
+    end
+
+    M1 & M2 & M3 -->|"/metrics endpoint"| Prom
+    Prom -->|"PromQL queries"| Graf
+
+    subgraph Metrics["Key Metrics"]
+        KM1["raft_node_role\nraft_current_term\nraft_leader_elections_total"]
+        KM2["lock_acquire_total\nlock_wait_seconds\ndeadlock_detected_total"]
+        KM3["cache_hits_total\ncache_misses_total\ncache_state_transitions_total"]
+        KM4["queue_depth\nqueue_message_latency_seconds\nqueue_redelivery_total"]
+    end
+```
+
+---
+
+## Port Map
+
+```mermaid
+graph TD
+    subgraph Ports["Port Mapping (host:container)"]
+        P8000["8000 → API Gateway\nSwagger: /docs"]
+        P8101["8101–8104 → Lock Nodes"]
+        P8201["8201–8203 → Queue Nodes"]
+        P8301["8301–8303 → Cache Nodes"]
+        P6379["6379 → Redis"]
+        P9090["9090 → Prometheus"]
+        P3000["3000 → Grafana"]
+    end
+```
