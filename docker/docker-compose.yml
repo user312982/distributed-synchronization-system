@@ -343,11 +343,14 @@ services:
     networks: [dist-net]
     environment:
       GF_SECURITY_ADMIN_PASSWORD: "admin123"
+      GF_SECURITY_ADMIN_USER: "admin"
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_AUTH_ANONYMOUS_ENABLED: "true"
       GF_AUTH_ANONYMOUS_ORG_ROLE: "Viewer"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: "/etc/grafana/provisioning/dashboards/distributed_sync.json"
     volumes:
       - grafana-data:/var/lib/grafana
+      - ../grafana/provisioning:/etc/grafana/provisioning
     ports:
       - "3000:3000"
     depends_on:

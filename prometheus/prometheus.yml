@@ -9,9 +9,7 @@ scrape_configs:
           - "lock-node1:9090"
           - "lock-node2:9090"
           - "lock-node3:9090"
-    relabel_configs:
-      - source_labels: [__address__]
-        target_label: instance
+          - "lock-node4:9090"
 
   - job_name: "queue-nodes"
     static_configs:
@@ -27,6 +25,7 @@ scrape_configs:
           - "cache-node2:9090"
           - "cache-node3:9090"
 
-  - job_name: "redis"
+  - job_name: "api"
     static_configs:
-      - targets: ["redis:6379"]
+      - targets:
+          - "api:8001"

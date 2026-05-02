@@ -123,8 +123,21 @@ async def root():
     return {
         "service": "Distributed Sync System",
         "version": "1.0.0",
+        "description": "Distributed Lock (Raft/PBFT) + Queue (Consistent Hashing) + Cache (MESI)",
         "nodes": list(NODE_ADDRESSES.keys()),
-        "docs": "/docs",
+        "endpoints": {
+            "docs": "/docs",
+            "health": "/health",
+            "liveness": "/health/live",
+            "readiness": "/health/ready",
+            "status": "/status",
+        },
+        "components": {
+            "lock_manager": "Raft consensus + PBFT Byzantine fault tolerance",
+            "queue": "Consistent hashing + at-least-once delivery",
+            "cache": "MESI protocol + LRU replacement",
+            "monitoring": "Prometheus :9090 | Grafana :3000",
+        },
     }
 
 
@@ -142,17 +155,60 @@ async def system_status():
 
 @app.get("/health", tags=["System"], summary="All Nodes Health")
 async def system_health():
+    """Cluster-wide health check. Shows UP/DOWN per node."""
     results = await asyncio.gather(
         *[_get(addr, "/health") for addr in NODE_ADDRESSES.values()],
         return_exceptions=True
     )
     statuses = {}
+    up_count = 0
     for node, result in zip(NODE_ADDRESSES.keys(), results):
         if isinstance(result, Exception) or result is None:
             statuses[node] = "DOWN"
         else:
             statuses[node] = "UP"
-    return {"nodes": statuses}
+            up_count += 1
+    total = len(NODE_ADDRESSES)
+    return {
+        "status": "healthy" if up_count == total else ("degraded" if up_count > 0 else "down"),
+        "nodes_up": up_count,
+        "nodes_total": total,
+        "nodes": statuses,
+    }
+
+
+@app.get("/health/live", tags=["System"], summary="Liveness probe")
+async def liveness():
+    """Kubernetes-style liveness probe. Always returns 200 if API process is alive."""
+    return {"status": "alive", "service": "distributed-sync-api"}
+
+
+@app.get("/health/ready", tags=["System"], summary="Readiness probe")
+async def readiness():
+    """
+    Readiness probe — returns 200 only if at least one node is reachable.
+    Returns 503 if all nodes are down.
+    """
+    results = await asyncio.gather(
+        *[_get(addr, "/health") for addr in NODE_ADDRESSES.values()],
+        return_exceptions=True
+    )
+    reachable = sum(
+        1 for r in results
+        if not isinstance(r, Exception) and r is not None
+    )
+    if reachable == 0:
+        from fastapi import Response
+        return Response(
+            content='{"status":"not_ready","reason":"all nodes unreachable"}',
+            status_code=503,
+            media_type="application/json",
+        )
+    return {
+        "status": "ready",
+        "nodes_reachable": reachable,
+        "nodes_total": len(NODE_ADDRESSES),
+    }
 
 
 # ── Lock Manager ──────────────────────────────────────────────────────────────

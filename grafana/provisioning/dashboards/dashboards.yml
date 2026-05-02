@@ -1,0 +1,11 @@
+apiVersion: 1
+
+providers:
+  - name: "Distributed Sync System"
+    orgId: 1
+    folder: "Distributed System"
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /etc/grafana/provisioning/dashboards
