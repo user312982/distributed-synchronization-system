@@ -13,6 +13,7 @@ Sistem ini mengimplementasikan tiga komponen sinkronisasi terdistribusi:
 | Komponen | Algoritma | Poin |
 |----------|-----------|------|
 | Distributed Lock Manager | **Raft Consensus** | 25 |
+| Byzantine Fault Tolerance | **PBFT Consensus** | Bonus |
 | Distributed Queue | **Consistent Hashing** | 20 |
 | Cache Coherence | **MESI Protocol** | 15 |
 | Containerization | **Docker Compose** | 10 |
@@ -70,7 +71,9 @@ docker compose ps
 ```
 distributed-sync-system/
 ├── src/
-│   ├── consensus/raft.py          # Raft dari scratch
+│   ├── consensus/
+│   │   ├── raft.py                # Raft consensus dari scratch
+│   │   └── pbft.py                # PBFT consensus (Bonus: Byzantine Tolerance)
 │   ├── nodes/
 │   │   ├── base_node.py           # Base class semua nodes
 │   │   ├── lock_manager.py        # Lock Manager + deadlock detection
@@ -101,9 +104,9 @@ distributed-sync-system/
 ## 🧪 Testing
 
 ```bash
-# Unit tests
+# Unit & Performance tests
 pip install -r requirements.txt
-pytest tests/unit/ -v
+pytest tests/unit/ tests/performance/ -v -s
 
 # Load testing
 locust -f benchmarks/load_test_scenarios.py --host=http://localhost:8000
@@ -114,11 +117,10 @@ locust -f benchmarks/load_test_scenarios.py --host=http://localhost:8000
 
 ## 📋 Fitur Utama
 
-### A. Distributed Lock Manager (Raft)
-- ✅ Leader election dengan randomized timeout
-- ✅ Log replication dengan majority commit
+### A. Distributed Lock Manager (Raft & PBFT)
+- ✅ **Raft (Default):** Leader election, Log replication, Network partition handling.
+- ✅ **PBFT (Bonus):** Byzantine Fault Tolerance, handling *Malicious Nodes* yang me-drop packet / mengirim hash palsu.
 - ✅ Shared dan Exclusive locks
-- ✅ Network partition handling (step down jika tidak dapat reach majority)
 - ✅ Deadlock detection via Wait-For Graph (DFS cycle detection)
 - ✅ Victim selection (abort youngest transaction)
 
@@ -134,6 +136,7 @@ locust -f benchmarks/load_test_scenarios.py --host=http://localhost:8000
 - ✅ Empat state: Modified, Exclusive, Shared, Invalid
 - ✅ Read protocol: E (no peers) / S (peers have copy)
 - ✅ Write protocol: broadcast Invalidate → M
+- ✅ Backing Store terpusat via Redis (mendukung inter-container sync)
 - ✅ LRU replacement policy O(1) via OrderedDict
 - ✅ Prometheus metrics (hit rate, miss rate, state transitions)
 
@@ -156,5 +159,6 @@ locust -f benchmarks/load_test_scenarios.py --host=http://localhost:8000
 
 1. Ongaro & Ousterhout, "In Search of an Understandable Consensus Algorithm" (Raft Paper)
 2. Tanenbaum & Van Steen, "Distributed Systems: Principles and Paradigms"
-3. Redis Distributed Lock Documentation
-4. MESI Protocol — IEEE Computer Architecture
+3. Castro & Liskov, "Practical Byzantine Fault Tolerance" (PBFT Paper)
+4. Redis Distributed Lock Documentation
+5. MESI Protocol — IEEE Computer Architecture

@@ -12,11 +12,14 @@ Cache Replacement: LRU (O(1) via OrderedDict)
 import asyncio
 import logging
 import time
+import json
 import uuid
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from typing import Any, Dict, List, Optional
+
+import redis.asyncio as aioredis
 
 from aiohttp import web
 
@@ -147,13 +150,10 @@ class CacheNode(BaseNode):
         Hit S: broadcast Invalidate to all peers → M, update locally
         Miss:  broadcast Invalidate → fetch/create → M
     """
-
-    # Simulated backing store (in practice Redis would hold ground truth)
-    _memory_store: Dict[str, Any] = {}
-
     def __init__(self, config: NodeConfig):
         super().__init__(config)
         self._lru = LRUCache(max_size=config.cache_max_size, node_id=config.node_id)
+        self._redis: Optional[aioredis.Redis] = None
         self._lock = asyncio.Lock()
         self._setup_cache_routes()
 
@@ -198,7 +198,8 @@ class CacheNode(BaseNode):
 
         # Cache MISS — fetch from backing store
         cache_misses.labels(node_id=self.node_id).inc()
-        value = CacheNode._memory_store.get(key)
+        value_raw = await self._redis.get(f"cache_store:{key}")
+        value = json.loads(value_raw) if value_raw else None
 
         if value is None:
             return {"hit": False, "key": key, "value": None, "state": "I"}
@@ -228,25 +229,25 @@ class CacheNode(BaseNode):
                 # Already modified exclusively — update directly
                 line.value = value
                 line.version += 1
-                CacheNode._memory_store[key] = value
+                await self._redis.set(f"cache_store:{key}", json.dumps(value))
                 return {"status": "ok", "key": key, "state": "M", "transition": "M→M"}
 
             elif old_state == MESIState.E:
                 # Exclusive — upgrade to M
                 await self._lru.update_state(key, MESIState.M, value)
-                CacheNode._memory_store[key] = value
+                await self._redis.set(f"cache_store:{key}", json.dumps(value))
                 return {"status": "ok", "key": key, "state": "M", "transition": "E→M"}
 
             elif old_state == MESIState.S:
                 # Shared — must invalidate all peers first
                 await self._broadcast_invalidate(key)
                 await self._lru.update_state(key, MESIState.M, value)
-                CacheNode._memory_store[key] = value
+                await self._redis.set(f"cache_store:{key}", json.dumps(value))
                 return {"status": "ok", "key": key, "state": "M", "transition": "S→M"}
 
         # Miss — invalidate all peers, then load M
         await self._broadcast_invalidate(key)
-        CacheNode._memory_store[key] = value
+        await self._redis.set(f"cache_store:{key}", json.dumps(value))
         new_line = CacheLine(key=key, value=value, state=MESIState.M, dirty=True)
         await self._lru.put(new_line)
         return {"status": "ok", "key": key, "state": "M", "transition": "I→M"}
@@ -303,4 +304,9 @@ class CacheNode(BaseNode):
         }
 
     async def on_start(self):
+        self._redis = aioredis.from_url(self.config.redis_url, decode_responses=True)
         logger.info("[%s] CacheNode started (MESI, LRU max=%d)", self.node_id, self.config.cache_max_size)
+
+    async def on_stop(self):
+        if self._redis:
+            await self._redis.aclose()

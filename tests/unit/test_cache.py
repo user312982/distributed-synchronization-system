@@ -2,7 +2,9 @@
 tests/unit/test_cache.py — Unit tests for MESI Cache Coherence
 """
 import asyncio
+import json
 import pytest
+from unittest.mock import AsyncMock
 
 from src.nodes.cache_node import LRUCache, CacheLine, MESIState, CacheNode
 from src.utils.config import NodeConfig
@@ -81,14 +83,15 @@ async def test_lru_state_transition():
 @pytest.mark.asyncio
 async def test_mesi_read_miss_sets_exclusive():
     """On read miss with no peers, should set E state."""
-    CacheNode._memory_store = {"mykey": "myvalue"}
-
     config = NodeConfig()
     config.node_id = "cache-test"
     config.peers = []
     config.cache_max_size = 100
 
     node = CacheNode(config)
+    node._redis = AsyncMock()
+    node._redis.get.return_value = json.dumps("myvalue")
+
     result = await node.read("mykey")
 
     assert result["hit"] is False
@@ -105,6 +108,8 @@ async def test_mesi_write_creates_modified():
     config.cache_max_size = 100
 
     node = CacheNode(config)
+    node._redis = AsyncMock()
+
     result = await node.write("writekey", "writevalue")
 
     assert result["state"] == "M"
@@ -114,14 +119,15 @@ async def test_mesi_write_creates_modified():
 @pytest.mark.asyncio
 async def test_mesi_read_hit():
     """Second read should be a cache hit."""
-    CacheNode._memory_store = {"hitkey": "hitvalue"}
-
     config = NodeConfig()
     config.node_id = "cache-test"
     config.peers = []
     config.cache_max_size = 100
 
     node = CacheNode(config)
+    node._redis = AsyncMock()
+    node._redis.get.return_value = json.dumps("hitvalue")
+
     await node.read("hitkey")   # Miss — loads into cache
     result = await node.read("hitkey")  # Should be hit now
 

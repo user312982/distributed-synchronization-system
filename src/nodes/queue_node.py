@@ -155,6 +155,10 @@ class QueueNode(BaseNode):
         """Handle internal RPC calls from peer nodes."""
         if method == "queue_enqueue":
             return await self._internal_enqueue(payload)
+        elif method == "queue_dequeue":
+            return await self._internal_dequeue(payload)
+        elif method == "queue_ack":
+            return await self._internal_ack(payload)
         elif method == "peer_status_update":
             # Update ring on node join/leave
             action = payload.get("action")
@@ -229,13 +233,20 @@ class QueueNode(BaseNode):
                 "queue": queue_name, "consumer_id": consumer_id
             })
             if result:
+                if result.get("error"):
+                    return web.json_response(result, status=503 if result["error"] == "forward_failed" else 400)
                 return web.json_response(result)
             return web.json_response({"error": "forward_failed"}, status=503)
 
+        result = await self._internal_dequeue({"queue": queue_name, "consumer_id": consumer_id})
+        return web.json_response(result)
+
+    async def _internal_dequeue(self, data: Dict) -> Dict:
+        queue_name = data.get("queue", "default")
         async with self._lock:
             q = self._queues.get(queue_name, [])
             if not q:
-                return web.json_response({"status": "empty"})
+                return {"status": "empty"}
 
             msg = q.pop(0)
             msg.delivery_count += 1
@@ -253,15 +264,35 @@ class QueueNode(BaseNode):
         latency = time.time() - msg.created_at
         queue_latency.observe(latency)
 
-        return web.json_response({
+        return {
             "msg_id": msg.msg_id,
             "queue": queue_name,
             "body": msg.body,
             "delivery_count": msg.delivery_count,
-        })
+        }
 
     async def _http_ack(self, request: web.Request) -> web.Response:
         data = await request.json()
+        queue_name = data.get("queue", "default")
+        msg_id = data.get("msg_id")
+
+        target = self._ring.get_node(queue_name)
+        if target != self.node_id:
+            result = await self.bus.call(target, "queue_ack", {
+                "queue": queue_name, "msg_id": msg_id
+            })
+            if result:
+                if result.get("status") == "not_found":
+                    return web.json_response(result, status=404)
+                return web.json_response(result)
+            return web.json_response({"error": "forward_failed"}, status=503)
+
+        result = await self._internal_ack({"queue": queue_name, "msg_id": msg_id})
+        if result.get("status") == "not_found":
+            return web.json_response(result, status=404)
+        return web.json_response(result)
+
+    async def _internal_ack(self, data: Dict) -> Dict:
         queue_name = data.get("queue", "default")
         msg_id = data.get("msg_id")
 
@@ -272,8 +303,8 @@ class QueueNode(BaseNode):
         if msg:
             # Remove from Redis persistence
             await self._remove_persisted(msg)
-            return web.json_response({"status": "acked", "msg_id": msg_id})
-        return web.json_response({"status": "not_found"}, status=404)
+            return {"status": "acked", "msg_id": msg_id}
+        return {"status": "not_found"}
 
     async def _http_stats(self, _: web.Request) -> web.Response:
         stats = {}

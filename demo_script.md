@@ -245,12 +245,12 @@ GET /cache/user-profile-123?node=node1
 > "Cache HIT dari node1."
 
 ```
-# 3. Read dari node2 → state berbeda (fresh fetch)
+# 3. Read dari node2 → state berbeda (Shared)
 GET /cache/user-profile-123?node=node2
-→ Response: {"hit": false, "state": "E"}
+→ Response: {"hit": false, "state": "S"}
 ```
 
-> "Node2 mengambil data baru dari backing store — state E (Exclusive) karena tidak ada peer lain yang punya."
+> "Node2 mendeteksi bahwa peer lain (node1) sudah memiliki copy data tersebut. Node2 kemudian mengambil data dari Backing Store (Redis) dan otomatis menyetel state-nya menjadi S (Shared), bukan E (Exclusive)."
 
 ```
 # 4. Snapshot
@@ -262,21 +262,32 @@ GET /cache/snapshot/all?node=node1
 ## Segmen 4 — PBFT Byzantine Fault Tolerance (Bonus) `[08:30–09:30]`
 
 **Script:**
-> "Sebagai bonus, saya mengimplementasikan PBFT untuk menangani Byzantine nodes — node yang berperilaku jahat atau mengirim data palsu."
+> "Sebagai fitur bonus, saya juga mengimplementasikan algoritma PBFT untuk menangani Byzantine nodes. Mari kita aktifkan mode ini dengan mengubah file konfigurasi."
 
 ```bash
-# Tunjukkan konfigurasi malicious node
-grep -A 5 "IS_MALICIOUS" docker/docker-compose.yml
+# 1. Buka docker-compose.yml, ubah CONSENSUS_TYPE dari raft ke pbft untuk lock-node1 s.d lock-node4
+# 2. Uncomment baris IS_MALICIOUS: "true" di lock-node4
+# 3. Restart container lock manager
+docker compose up -d
 ```
 
-> "lock-node4 dikonfigurasi sebagai Byzantine node — `IS_MALICIOUS: true`."
+> "Saya mengubah konsensus menjadi PBFT dan mengkonfigurasi `lock-node4` sebagai Byzantine node (`IS_MALICIOUS: true`)."
+
+```
+# 4. Kirim request untuk memicu proses konsensus PBFT
+POST /lock/acquire
+Body: { "resource": "demo-pbft", "client_id": "demo-user", "ttl": 10, "node": "node1" }
+→ Response: {"status": "GRANTED"}
+```
+
+> "Meskipun ada node jahat, request tetap berhasil karena 3 node lainnya jujur (Quorum 2f+1 tercapai)."
 
 ```bash
-# Lihat log Byzantine behavior
+# 5. Lihat bukti kejahatan Node 4 di log (pastikan Anda berada di dalam folder 'docker')
 docker compose logs lock-node4 2>&1 | grep MALICIOUS | tail -10
 ```
 
-> "Terlihat node4 mengirim digest palsu dan meng-drop commit. Namun sistem tetap berfungsi karena PBFT toleran terhadap `f = (N-1)/3 = 1` Byzantine node dari 4 total node."
+> "Terlihat di terminal bahwa node4 bertindak sebagai Byzantine Node. Dia secara acak mengirim digest palsu dan sengaja membuang (dropping) paket `PREPARE` atau `COMMIT`. Namun sistem terbukti Fault Tolerant."
 
 ```
 # Tunjukkan status node via API
@@ -297,7 +308,7 @@ GET /status
 # 1. Unit + Performance tests
 cd ..
 source venv/bin/activate
-pytest tests/unit/ tests/performance/ -v -s 2>&1 | tail -40
+pytest tests/unit/ tests/performance/ -v -s
 ```
 
 > "27 PBFT tests dan 12 performance tests — semua passed. Hasil benchmark menunjukkan:
