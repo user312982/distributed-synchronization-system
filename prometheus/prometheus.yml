@@ -1,0 +1,32 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: "lock-nodes"
+    static_configs:
+      - targets:
+          - "lock-node1:9090"
+          - "lock-node2:9090"
+          - "lock-node3:9090"
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+
+  - job_name: "queue-nodes"
+    static_configs:
+      - targets:
+          - "queue-node1:9090"
+          - "queue-node2:9090"
+          - "queue-node3:9090"
+
+  - job_name: "cache-nodes"
+    static_configs:
+      - targets:
+          - "cache-node1:9090"
+          - "cache-node2:9090"
+          - "cache-node3:9090"
+
+  - job_name: "redis"
+    static_configs:
+      - targets: ["redis:6379"]

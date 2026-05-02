@@ -1,0 +1,355 @@
+version: "3.9"
+
+# ── Networks ──────────────────────────────────────────────────────────────────
+networks:
+  dist-net:
+    driver: bridge
+
+# ── Volumes ───────────────────────────────────────────────────────────────────
+volumes:
+  redis-data:
+  prometheus-data:
+  grafana-data:
+
+# ── Services ──────────────────────────────────────────────────────────────────
+services:
+
+  # ── Redis ────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: dist-redis
+    networks: [dist-net]
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # ── Lock Manager Nodes (Raft cluster) ─────────────────────────────────────
+  lock-node1:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.node
+    container_name: lock-node1
+    hostname: lock-node1
+    networks: [dist-net]
+    environment:
+      NODE_ID: lock-node1
+      NODE_HOST: "0.0.0.0"
+      NODE_PORT: "8001"
+      NODE_PEERS: "lock-node2:8001,lock-node3:8001,lock-node4:8001"
+      NODE_ROLE: lock
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      CONSENSUS_TYPE: pbft
+      RAFT_ELECTION_TIMEOUT_MIN: "150"
+      RAFT_ELECTION_TIMEOUT_MAX: "300"
+      RAFT_HEARTBEAT_INTERVAL: "50"
+      METRICS_PORT: "9090"
+      LOG_LEVEL: INFO
+    ports:
+      - "8101:8001"
+      - "9101:9090"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  lock-node2:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.node
+    container_name: lock-node2
+    hostname: lock-node2
+    networks: [dist-net]
+    environment:
+      NODE_ID: lock-node2
+      NODE_HOST: "0.0.0.0"
+      NODE_PORT: "8001"
+      NODE_PEERS: "lock-node1:8001,lock-node3:8001,lock-node4:8001"
+      NODE_ROLE: lock
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      CONSENSUS_TYPE: pbft
+      METRICS_PORT: "9090"
+      LOG_LEVEL: INFO
+    ports:
+      - "8102:8001"
+      - "9102:9090"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  lock-node3:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.node
+    container_name: lock-node3
+    hostname: lock-node3
+    networks: [dist-net]
+    environment:
+      NODE_ID: lock-node3
+      NODE_HOST: "0.0.0.0"
+      NODE_PORT: "8001"
+      NODE_PEERS: "lock-node1:8001,lock-node2:8001,lock-node4:8001"
+      NODE_ROLE: lock
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      CONSENSUS_TYPE: pbft
+      METRICS_PORT: "9090"
+      LOG_LEVEL: INFO
+    ports:
+      - "8103:8001"
+      - "9103:9090"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  lock-node4:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.node
+    container_name: lock-node4
+    hostname: lock-node4
+    networks: [dist-net]
+    environment:
+      NODE_ID: lock-node4
+      NODE_HOST: "0.0.0.0"
+      NODE_PORT: "8001"
+      NODE_PEERS: "lock-node1:8001,lock-node2:8001,lock-node3:8001"
+      NODE_ROLE: lock
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      CONSENSUS_TYPE: pbft
+      IS_MALICIOUS: "true"
+      METRICS_PORT: "9090"
+      LOG_LEVEL: INFO
+    ports:
+      - "8104:8001"
+      - "9104:9090"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Queue Nodes ────────────────────────────────────────────────────────────
+  queue-node1:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.node
+    container_name: queue-node1
+    hostname: queue-node1
+    networks: [dist-net]
+    environment:
+      NODE_ID: queue-node1
+      NODE_HOST: "0.0.0.0"
+      NODE_PORT: "8001"
+      NODE_PEERS: "queue-node2:8001,queue-node3:8001"
+      NODE_ROLE: queue
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      QUEUE_VIRTUAL_NODES: "150"
+      QUEUE_DELIVERY_TIMEOUT: "30"
+      QUEUE_MAX_RETRY: "5"
+      METRICS_PORT: "9090"
+      LOG_LEVEL: INFO
+    ports:
+      - "8201:8001"
+      - "9201:9090"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  queue-node2:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.node
+    container_name: queue-node2
+    hostname: queue-node2
+    networks: [dist-net]
+    environment:
+      NODE_ID: queue-node2
+      NODE_HOST: "0.0.0.0"
+      NODE_PORT: "8001"
+      NODE_PEERS: "queue-node1:8001,queue-node3:8001"
+      NODE_ROLE: queue
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      METRICS_PORT: "9090"
+      LOG_LEVEL: INFO
+    ports:
+      - "8202:8001"
+      - "9202:9090"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  queue-node3:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.node
+    container_name: queue-node3
+    hostname: queue-node3
+    networks: [dist-net]
+    environment:
+      NODE_ID: queue-node3
+      NODE_HOST: "0.0.0.0"
+      NODE_PORT: "8001"
+      NODE_PEERS: "queue-node1:8001,queue-node2:8001"
+      NODE_ROLE: queue
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      METRICS_PORT: "9090"
+      LOG_LEVEL: INFO
+    ports:
+      - "8203:8001"
+      - "9203:9090"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Cache Nodes ────────────────────────────────────────────────────────────
+  cache-node1:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.node
+    container_name: cache-node1
+    hostname: cache-node1
+    networks: [dist-net]
+    environment:
+      NODE_ID: cache-node1
+      NODE_HOST: "0.0.0.0"
+      NODE_PORT: "8001"
+      NODE_PEERS: "cache-node2:8001,cache-node3:8001"
+      NODE_ROLE: cache
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      CACHE_MAX_SIZE: "1000"
+      METRICS_PORT: "9090"
+      LOG_LEVEL: INFO
+    ports:
+      - "8301:8001"
+      - "9301:9090"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  cache-node2:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.node
+    container_name: cache-node2
+    hostname: cache-node2
+    networks: [dist-net]
+    environment:
+      NODE_ID: cache-node2
+      NODE_HOST: "0.0.0.0"
+      NODE_PORT: "8001"
+      NODE_PEERS: "cache-node1:8001,cache-node3:8001"
+      NODE_ROLE: cache
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      CACHE_MAX_SIZE: "1000"
+      METRICS_PORT: "9090"
+      LOG_LEVEL: INFO
+    ports:
+      - "8302:8001"
+      - "9302:9090"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  cache-node3:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.node
+    container_name: cache-node3
+    hostname: cache-node3
+    networks: [dist-net]
+    environment:
+      NODE_ID: cache-node3
+      NODE_HOST: "0.0.0.0"
+      NODE_PORT: "8001"
+      NODE_PEERS: "cache-node1:8001,cache-node2:8001"
+      NODE_ROLE: cache
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      CACHE_MAX_SIZE: "1000"
+      METRICS_PORT: "9090"
+      LOG_LEVEL: INFO
+    ports:
+      - "8303:8001"
+      - "9303:9090"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── REST API Gateway ───────────────────────────────────────────────────────
+  api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.api
+    container_name: dist-api
+    networks: [dist-net]
+    environment:
+      NODE1_ADDR: "lock-node1:8001"
+      NODE2_ADDR: "lock-node2:8001"
+      NODE3_ADDR: "lock-node3:8001"
+      NODE4_ADDR: "lock-node4:8001"
+    ports:
+      - "8000:8000"
+    depends_on:
+      - lock-node1
+      - lock-node2
+      - lock-node3
+      - lock-node4
+    restart: unless-stopped
+
+  # ── Prometheus ─────────────────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:v2.51.2
+    container_name: dist-prometheus
+    networks: [dist-net]
+    volumes:
+      - ../prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.console.libraries=/usr/share/prometheus/console_libraries"
+      - "--web.console.templates=/usr/share/prometheus/consoles"
+    ports:
+      - "9090:9090"
+    restart: unless-stopped
+
+  # ── Grafana ────────────────────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:10.4.2
+    container_name: dist-grafana
+    networks: [dist-net]
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: "admin123"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: "Viewer"
+    volumes:
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+    restart: unless-stopped

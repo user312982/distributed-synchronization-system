@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Distributed Sync System Dashboard</title>
+    <style>
+        :root {
+            --bg-color: #0f172a;
+            --card-bg: #1e293b;
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --accent: #3b82f6;
+            --success: #10b981;
+            --error: #ef4444;
+            --border: #334155;
+        }
+        
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+            line-height: 1.6;
+            padding: 2rem;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2rem;
+            padding-bottom: 1rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        h1 {
+            font-size: 1.8rem;
+            font-weight: 600;
+        }
+
+        .api-status {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+        }
+
+        .indicator {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background-color: var(--error);
+        }
+
+        .indicator.online {
+            background-color: var(--success);
+            box-shadow: 0 0 8px var(--success);
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .card {
+            background-color: var(--card-bg);
+            border-radius: 8px;
+            padding: 1.5rem;
+            border: 1px solid var(--border);
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        }
+
+        .card h2 {
+            font-size: 1.2rem;
+            margin-bottom: 1rem;
+            color: var(--accent);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .node-status {
+            display: flex;
+            justify-content: space-between;
+            padding: 0.75rem 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .node-status:last-child {
+            border-bottom: none;
+        }
+
+        .badge {
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            font-weight: 500;
+        }
+
+        .badge.UP { background-color: rgba(16, 185, 129, 0.2); color: var(--success); }
+        .badge.DOWN { background-color: rgba(239, 68, 68, 0.2); color: var(--error); }
+        .badge.LEADER { background-color: rgba(59, 130, 246, 0.2); color: var(--accent); }
+        .badge.FOLLOWER { background-color: rgba(148, 163, 184, 0.2); color: var(--text-secondary); }
+
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 0.5rem;
+            font-size: 0.95rem;
+        }
+        
+        .stat-value {
+            font-family: monospace;
+            font-size: 1.1rem;
+        }
+
+        .refresh-btn {
+            background-color: var(--accent);
+            color: white;
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: 500;
+            transition: background-color 0.2s;
+        }
+
+        .refresh-btn:hover {
+            background-color: #2563eb;
+        }
+        
+        pre {
+            background: rgba(0,0,0,0.2);
+            padding: 1rem;
+            border-radius: 4px;
+            overflow-x: auto;
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Distributed Sync System</h1>
+            <div class="api-status">
+                <span>API Control Plane</span>
+                <div id="api-indicator" class="indicator"></div>
+            </div>
+        </header>
+
+        <div class="grid">
+            <div class="card">
+                <h2>Node Health <button class="refresh-btn" onclick="fetchHealth()">Refresh</button></h2>
+                <div id="health-container">
+                    <p style="color: var(--text-secondary);">Loading health data...</p>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>Raft Consensus <button class="refresh-btn" onclick="fetchStatus()">Refresh</button></h2>
+                <div id="raft-container">
+                    <p style="color: var(--text-secondary);">Loading Raft status...</p>
+                </div>
+            </div>
+
+            <div class="card">
+                <h2>Queue Stats <button class="refresh-btn" onclick="fetchQueueStats()">Refresh</button></h2>
+                <div id="queue-container">
+                    <p style="color: var(--text-secondary);">Loading queue stats...</p>
+                </div>
+            </div>
+        </div>
+        
+        <div class="card">
+            <h2>Raw System Status</h2>
+            <pre id="raw-status">Loading...</pre>
+        </div>
+    </div>
+
+    <script>
+        const API_URL = '';
+
+        async function fetchHealth() {
+            try {
+                const res = await fetch(`${API_URL}/health`);
+                const data = await res.json();
+                
+                document.getElementById('api-indicator').classList.add('online');
+                
+                const container = document.getElementById('health-container');
+                container.innerHTML = '';
+                
+                for (const [node, status] of Object.entries(data.nodes)) {
+                    container.innerHTML += `
+                        <div class="node-status">
+                            <span>${node}</span>
+                            <span class="badge ${status}">${status}</span>
+                        </div>
+                    `;
+                }
+            } catch (err) {
+                document.getElementById('api-indicator').classList.remove('online');
+                document.getElementById('health-container').innerHTML = `<p style="color: var(--error);">Error connecting to API</p>`;
+            }
+        }
+
+        async function fetchStatus() {
+            try {
+                const res = await fetch(`${API_URL}/status`);
+                const data = await res.json();
+                
+                document.getElementById('raw-status').textContent = JSON.stringify(data, null, 2);
+                
+                const container = document.getElementById('raft-container');
+                container.innerHTML = '';
+                
+                for (const [node, info] of Object.entries(data)) {
+                    if (info.error) continue;
+                    // Assuming the node status returns raft info when it's a lock manager
+                    const role = info.raft ? info.raft.role : 'UNKNOWN';
+                    const term = info.raft ? info.raft.term : '-';
+                    
+                    container.innerHTML += `
+                        <div class="node-status">
+                            <span>${node} (Term: ${term})</span>
+                            <span class="badge ${role}">${role}</span>
+                        </div>
+                    `;
+                }
+            } catch (err) {
+                document.getElementById('raft-container').innerHTML = `<p style="color: var(--error);">Error fetching status</p>`;
+            }
+        }
+        
+        async function fetchQueueStats() {
+            try {
+                const res = await fetch(`${API_URL}/queue/stats?node=node1`);
+                const data = await res.json();
+                
+                const container = document.getElementById('queue-container');
+                if (data.error || !data.queue_size) {
+                    container.innerHTML = `<p style="color: var(--text-secondary);">No queue data available.</p>`;
+                    return;
+                }
+                
+                container.innerHTML = `
+                    <div class="stat-row">
+                        <span>Total Items</span>
+                        <span class="stat-value">${data.queue_size || 0}</span>
+                    </div>
+                    <div class="stat-row">
+                        <span>In-flight</span>
+                        <span class="stat-value">${data.in_flight_size || 0}</span>
+                    </div>
+                `;
+            } catch (err) {
+                document.getElementById('queue-container').innerHTML = `<p style="color: var(--text-secondary);">Waiting for queue nodes...</p>`;
+            }
+        }
+
+        function refreshAll() {
+            fetchHealth();
+            fetchStatus();
+            fetchQueueStats();
+        }
+
+        // Initial load
+        refreshAll();
+        
+        // Auto refresh every 5 seconds
+        setInterval(refreshAll, 5000);
+    </script>
+</body>
+</html>

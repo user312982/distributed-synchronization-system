@@ -1,0 +1,356 @@
+openapi: 3.0.3
+info:
+  title: Distributed Synchronization System API
+  description: |
+    REST Control Plane untuk Distributed Synchronization System.
+    
+    Sistem ini terdiri dari:
+    - **Distributed Lock Manager** menggunakan Raft Consensus
+    - **Distributed Queue** menggunakan Consistent Hashing
+    - **Distributed Cache** menggunakan MESI Protocol
+  version: 1.0.0
+  contact:
+    name: TUGAS 2 - Sistem Parallel dan Terdistribusi
+
+servers:
+  - url: http://localhost:8000
+    description: Local Development
+
+tags:
+  - name: System
+    description: System-wide status and health
+  - name: Lock Manager
+    description: Distributed lock operations (Raft-backed)
+  - name: Queue
+    description: Distributed queue operations (Consistent Hashing)
+  - name: Cache
+    description: Distributed cache operations (MESI Protocol)
+
+paths:
+  /:
+    get:
+      tags: [System]
+      summary: API Root
+      responses:
+        '200':
+          description: API info
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  service: {type: string}
+                  version: {type: string}
+                  nodes: {type: array, items: {type: string}}
+                  docs: {type: string}
+
+  /health:
+    get:
+      tags: [System]
+      summary: Health check for all nodes
+      responses:
+        '200':
+          description: Node health statuses
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  nodes:
+                    type: object
+                    additionalProperties:
+                      type: string
+                      enum: [UP, DOWN]
+              example:
+                nodes:
+                  node1: UP
+                  node2: UP
+                  node3: DOWN
+
+  /status:
+    get:
+      tags: [System]
+      summary: Detailed status from all nodes
+      responses:
+        '200':
+          description: Per-node status objects
+
+  /lock/acquire:
+    post:
+      tags: [Lock Manager]
+      summary: Acquire a distributed lock
+      description: |
+        Acquires a lock via Raft consensus. Request is forwarded to the current leader.
+        
+        Lock Types:
+        - `EXCLUSIVE`: Only one transaction can hold. Blocks all others.
+        - `SHARED`: Multiple transactions can hold simultaneously.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [resource]
+              properties:
+                txn_id:
+                  type: string
+                  description: Transaction ID (auto-generated if not provided)
+                resource:
+                  type: string
+                  description: Resource to lock
+                  example: "database-table-users"
+                lock_type:
+                  type: string
+                  enum: [SHARED, EXCLUSIVE]
+                  default: EXCLUSIVE
+                node:
+                  type: string
+                  description: Node to send request to
+                  default: node1
+      responses:
+        '200':
+          description: Lock result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [GRANTED, WAITING, DEADLOCK, DENIED]
+                  txn_id: {type: string}
+                  resource: {type: string}
+              examples:
+                granted:
+                  value: {status: GRANTED, txn_id: "abc-123", resource: "users"}
+                deadlock:
+                  value: {status: DEADLOCK, txn_id: "abc-123"}
+        '307':
+          description: Not leader — redirect to leader
+        '503':
+          description: Node unreachable
+
+  /lock/release:
+    post:
+      tags: [Lock Manager]
+      summary: Release a distributed lock
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [txn_id, resource]
+              properties:
+                txn_id: {type: string}
+                resource: {type: string}
+                node: {type: string, default: node1}
+      responses:
+        '200':
+          description: Lock released
+          content:
+            application/json:
+              example: {status: ok}
+
+  /lock/state:
+    get:
+      tags: [Lock Manager]
+      summary: Get current lock state
+      parameters:
+        - name: node
+          in: query
+          schema: {type: string, default: node1}
+      responses:
+        '200':
+          description: Current lock table and Raft status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  lock_state:
+                    type: object
+                    additionalProperties:
+                      type: object
+                      properties:
+                        holders:
+                          type: object
+                          additionalProperties: {type: string}
+                        waiters:
+                          type: array
+                          items:
+                            type: object
+                  raft:
+                    type: object
+
+  /queue/enqueue:
+    post:
+      tags: [Queue]
+      summary: Enqueue a message
+      description: |
+        Enqueues a message. The system automatically routes to the correct node
+        based on consistent hashing of the queue name. Message is persisted to
+        Redis before acknowledgment for at-least-once delivery.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body]
+              properties:
+                queue: {type: string, default: default}
+                body: {}
+                producer_id: {type: string, default: api}
+                node: {type: string, default: node1}
+            example:
+              queue: "orders"
+              body: {order_id: 42, amount: 99.99}
+              producer_id: "web-server"
+      responses:
+        '200':
+          description: Message enqueued
+          content:
+            application/json:
+              example: {status: ok, msg_id: "uuid-here", queue: "orders"}
+
+  /queue/dequeue:
+    post:
+      tags: [Queue]
+      summary: Dequeue next message
+      description: |
+        Dequeues next message from queue. Message moves to in-flight state.
+        Consumer must ACK within delivery_timeout (default 30s) or message is redelivered.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                queue: {type: string, default: default}
+                consumer_id: {type: string}
+                node: {type: string, default: node1}
+      responses:
+        '200':
+          description: Message dequeued (or empty)
+          content:
+            application/json:
+              examples:
+                message:
+                  value: {msg_id: "uuid", queue: "orders", body: {}, delivery_count: 1}
+                empty:
+                  value: {status: empty}
+
+  /queue/ack:
+    post:
+      tags: [Queue]
+      summary: Acknowledge message
+      description: Removes message from in-flight and persistence store.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [queue, msg_id]
+              properties:
+                queue: {type: string}
+                msg_id: {type: string}
+                node: {type: string, default: node1}
+      responses:
+        '200':
+          description: Message acknowledged
+
+  /queue/stats:
+    get:
+      tags: [Queue]
+      summary: Queue statistics
+      parameters:
+        - name: node
+          in: query
+          schema: {type: string, default: node1}
+      responses:
+        '200':
+          description: Queue depths and ring distribution
+
+  /cache/{key}:
+    get:
+      tags: [Cache]
+      summary: Read cache key (MESI read protocol)
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema: {type: string}
+        - name: node
+          in: query
+          schema: {type: string, default: node1}
+      responses:
+        '200':
+          description: Cache result
+          content:
+            application/json:
+              examples:
+                hit:
+                  value: {hit: true, key: "mykey", value: 42, state: "S"}
+                miss:
+                  value: {hit: false, key: "mykey", value: null, state: "I"}
+
+    put:
+      tags: [Cache]
+      summary: Write cache key (MESI write protocol)
+      description: |
+        Writes a key. Triggers MESI write protocol:
+        - If S: broadcast Invalidate to all peers → transition to M
+        - If E: transition E→M locally
+        - If I/miss: broadcast Invalidate → set M
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [value]
+              properties:
+                value: {}
+                node: {type: string, default: node1}
+      responses:
+        '200':
+          description: Write result
+          content:
+            application/json:
+              example: {status: ok, key: "mykey", state: "M", transition: "S→M"}
+
+    delete:
+      tags: [Cache]
+      summary: Invalidate cache key (set to I state)
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema: {type: string}
+        - name: node
+          in: query
+          schema: {type: string, default: node1}
+      responses:
+        '200':
+          description: Invalidated
+
+  /cache/snapshot/all:
+    get:
+      tags: [Cache]
+      summary: Get full cache snapshot from a node
+      parameters:
+        - name: node
+          in: query
+          schema: {type: string, default: node1}
+      responses:
+        '200':
+          description: All cache lines with MESI states
