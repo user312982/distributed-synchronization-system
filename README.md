@@ -6,9 +6,9 @@ Deadline: 3 Mei 2026 | Bobot: 30%
 
 ---
 
-## 🏗️ Arsitektur
+## Arsitektur Sistem
 
-Sistem ini mengimplementasikan tiga komponen sinkronisasi terdistribusi:
+Sistem ini mengimplementasikan tiga komponen sinkronisasi terdistribusi utama:
 
 | Komponen | Algoritma | Poin |
 |----------|-----------|------|
@@ -18,9 +18,11 @@ Sistem ini mengimplementasikan tiga komponen sinkronisasi terdistribusi:
 | Cache Coherence | **MESI Protocol** | 15 |
 | Containerization | **Docker Compose** | 10 |
 
-```
+### Topologi Jaringan
+
+```text
 REST API (FastAPI) :8000
-    ├── Lock Nodes ×3 (Raft Leader Election + Log Replication)
+    ├── Lock Nodes ×4 (Raft/PBFT, Leader Election, Log Replication)
     ├── Queue Nodes ×3 (Consistent Hash Ring + Redis Persistence)
     └── Cache Nodes ×3 (MESI Protocol + LRU Replacement)
               │
@@ -31,131 +33,131 @@ REST API (FastAPI) :8000
 
 ---
 
-## 🚀 Quick Start
+## Panduan Eksekusi & Demonstrasi (Quick Start)
+
+Sistem berjalan sepenuhnya di dalam Docker dan menyediakan antarmuka interaktif untuk demonstrasi fitur.
 
 ```bash
-# Clone dan masuk ke directory
+# Kloning repositori dan masuk ke direktori proyek
 git clone <repo-url> && cd distributed-sync-system
 
-# Copy environment config
+# Salin konfigurasi environment
 cp .env.example .env
 
-# Build dan jalankan semua 9 nodes + monitoring
+# Jalankan seluruh arsitektur (14 Container)
 cd docker
 docker compose up --build -d
-
-# Cek semua services running
-docker compose ps
 ```
 
-**Akses:**
-- 📖 **Swagger UI**: http://localhost:8000/docs
-- 📊 **Grafana**: http://localhost:3000 (admin/admin123)
-- 📈 **Prometheus**: http://localhost:9090
+### Akses Demonstrasi
+- **Swagger UI (Testing API)**: http://localhost:8000/docs
+  *Gunakan antarmuka ini untuk melakukan simulasi Lock, Queue, dan Cache secara langsung pada browser Anda.*
+- **Grafana Dashboard**: http://localhost:3000 (Login: admin/admin123)
+  *Pemantauan metrik secara real-time untuk Cache hit/miss, Raft terms, dan antrean Queue.*
+- **Prometheus**: http://localhost:9090
+
+### Demonstrasi PBFT (Bonus)
+Sistem memiliki kapabilitas toleransi kesalahan Bizantium (Byzantine Fault Tolerance). Untuk mendemonstrasikan fitur ini:
+1. Buka file `docker/docker-compose.yml`.
+2. Ubah variabel `CONSENSUS_TYPE: raft` menjadi `CONSENSUS_TYPE: pbft` pada seluruh `lock-node`.
+3. Hilangkan komentar pada baris `IS_MALICIOUS: "true"` di bawah konfigurasi `lock-node4`.
+4. Muat ulang container: `docker compose up -d`
+5. Kirim permintaan akuisisi Lock melalui Swagger UI (`POST /lock/acquire`).
+6. Verifikasi log perilaku *malicious*: `docker compose logs lock-node4 2>&1 | grep MALICIOUS`
 
 ---
 
-## 🔧 Stack Teknologi
+## Spesifikasi Teknologi
 
-- **Python 3.11** + `asyncio` untuk concurrent programming
-- **aiohttp** untuk inter-node HTTP/JSON RPC
-- **FastAPI** untuk REST control plane + auto-generated Swagger/OpenAPI
-- **Redis** untuk message persistence dan distributed state
-- **Prometheus** + **Grafana** untuk observability
-- **Docker** + **Docker Compose** untuk containerization
+- **Python 3.11** dengan `asyncio` untuk *concurrent programming*.
+- **aiohttp** untuk komunikasi inter-node via HTTP/JSON RPC.
+- **FastAPI** sebagai *REST control plane* dan generator OpenAPI.
+- **Redis** untuk *message persistence* dan *distributed state*.
+- **Prometheus & Grafana** untuk observabilitas dan pemantauan.
+- **Docker & Docker Compose** untuk orkestrasi container.
 
 ---
 
-## 📁 Struktur Project
+## Struktur Proyek
 
-```
+```text
 distributed-sync-system/
 ├── src/
 │   ├── consensus/
-│   │   ├── raft.py                # Raft consensus dari scratch
-│   │   └── pbft.py                # PBFT consensus (Bonus: Byzantine Tolerance)
+│   │   ├── raft.py                # Implementasi algoritma Raft
+│   │   └── pbft.py                # Implementasi algoritma PBFT (Bonus)
 │   ├── nodes/
-│   │   ├── base_node.py           # Base class semua nodes
-│   │   ├── lock_manager.py        # Lock Manager + deadlock detection
-│   │   ├── queue_node.py          # Queue + consistent hashing
-│   │   └── cache_node.py          # MESI + LRU cache
+│   │   ├── base_node.py           # Kelas dasar seluruh node
+│   │   ├── lock_manager.py        # Lock Manager dan deteksi deadlock
+│   │   ├── queue_node.py          # Sistem antrean dengan Consistent Hashing
+│   │   └── cache_node.py          # Protokol MESI dan cache LRU
 │   ├── communication/
-│   │   ├── message_passing.py     # Async HTTP RPC
-│   │   └── failure_detector.py    # Heartbeat failure detection
+│   │   ├── message_passing.py     # RPC Asinkronus HTTP
+│   │   └── failure_detector.py    # Deteksi kegagalan berbasis Heartbeat
 │   └── utils/
-│       ├── config.py              # .env config loader
-│       └── metrics.py             # Prometheus metrics
-├── api/main.py                    # FastAPI REST gateway
-├── tests/unit/                    # Unit tests (pytest)
-├── benchmarks/load_test_scenarios.py  # Locust load tests
+│       ├── config.py              # Pemuat konfigurasi environment
+│       └── metrics.py             # Definisi metrik Prometheus
+├── api/main.py                    # Gateway REST FastAPI
+├── tests/unit/                    # Pengujian unit (Pytest)
+├── benchmarks/                    # Skenario pengujian beban (Locust)
 ├── docker/
 │   ├── Dockerfile.node
 │   ├── Dockerfile.api
-│   └── docker-compose.yml         # 9 nodes + monitoring
-├── docs/
-│   ├── architecture.md
-│   ├── api_spec.yaml              # OpenAPI 3.0
-│   └── deployment_guide.md
-└── prometheus/prometheus.yml
+│   └── docker-compose.yml         # Konfigurasi orkestrasi container
+└── docs/                          # Dokumentasi arsitektur dan spesifikasi API
 ```
 
 ---
 
-## 🧪 Testing
+## Fitur Sistem Utama
+
+### A. Distributed Lock Manager (Raft & PBFT)
+- **Raft (Bawaan):** *Leader election*, *Log replication*, penanganan partisi jaringan.
+- **PBFT (Bonus):** *Byzantine Fault Tolerance*, menangani *Malicious Nodes* yang secara sengaja membuang paket atau mengirimkan representasi data (hash) palsu.
+- Dukungan *Shared* dan *Exclusive locks*.
+- Deteksi kebuntuan (Deadlock) menggunakan *Wait-For Graph* (deteksi siklus DFS).
+- Pemilihan korban (Victim selection) dengan membatalkan transaksi termuda.
+
+### B. Distributed Queue (Consistent Hashing)
+- Implementasi node virtual (150 per node) untuk distribusi beban yang seragam.
+- Dukungan *Multiple producers* dan *consumers*.
+- Persistensi pesan ke Redis sebelum *Acknowledgement* (ACK).
+- Pemulihan state node pasca restart.
+- Pengiriman *At-least-once* (pengiriman ulang pasca timeout).
+- Integrasi *Dead Letter Queue*.
+
+### C. Distributed Cache Coherence (MESI)
+- Empat status kepemilikan: *Modified, Exclusive, Shared, Invalid*.
+- Protokol baca: E (tanpa peer) / S (peer memiliki salinan).
+- Protokol tulis: *Broadcast Invalidate* ke M.
+- Penyimpanan pendukung terpusat melalui Redis (sinkronisasi antar-container).
+- Kebijakan penggantian cache LRU dengan kompleksitas O(1) via `OrderedDict`.
+- Metrik Prometheus komprehensif (Hit rate, Miss rate, Transisi state).
+
+---
+
+## Pengujian dan Tolok Ukur (Testing & Benchmark)
 
 ```bash
-# Unit & Performance tests
+# Pengujian Unit & Performa
 pip install -r requirements.txt
 pytest tests/unit/ tests/performance/ -v -s
 
-# Load testing
+# Pengujian Beban (Load Testing)
 locust -f benchmarks/load_test_scenarios.py --host=http://localhost:8000
-# Buka http://localhost:8089 untuk Locust UI
+# Buka UI Locust di http://localhost:8089
 ```
 
 ---
 
-## 📋 Fitur Utama
+## Tautan
 
-### A. Distributed Lock Manager (Raft & PBFT)
-- ✅ **Raft (Default):** Leader election, Log replication, Network partition handling.
-- ✅ **PBFT (Bonus):** Byzantine Fault Tolerance, handling *Malicious Nodes* yang me-drop packet / mengirim hash palsu.
-- ✅ Shared dan Exclusive locks
-- ✅ Deadlock detection via Wait-For Graph (DFS cycle detection)
-- ✅ Victim selection (abort youngest transaction)
-
-### B. Distributed Queue (Consistent Hashing)
-- ✅ Virtual nodes (150 per node) untuk distribusi uniform
-- ✅ Multiple producers dan consumers
-- ✅ Message persistence ke Redis sebelum ACK
-- ✅ Recovery dari Redis saat node restart
-- ✅ At-least-once delivery (redelivery setelah timeout)
-- ✅ Dead Letter Queue (setelah max retry)
-
-### C. Distributed Cache Coherence (MESI)
-- ✅ Empat state: Modified, Exclusive, Shared, Invalid
-- ✅ Read protocol: E (no peers) / S (peers have copy)
-- ✅ Write protocol: broadcast Invalidate → M
-- ✅ Backing Store terpusat via Redis (mendukung inter-container sync)
-- ✅ LRU replacement policy O(1) via OrderedDict
-- ✅ Prometheus metrics (hit rate, miss rate, state transitions)
-
-### D. Containerization
-- ✅ Multi-stage Dockerfile (slim runtime image)
-- ✅ Docker Compose dengan 9 nodes + Redis + Prometheus + Grafana
-- ✅ Dynamic scaling: `docker compose up --scale lock-node1=5`
-- ✅ Environment configuration via `.env`
+- **Repositori GitHub**: _[isi setelah upload]_
+- **Demonstrasi YouTube**: _[isi setelah upload]_
 
 ---
 
-## 🌐 Link
-
-- **GitHub Repository**: _[isi setelah upload]_
-- **YouTube Demo**: _[isi setelah upload]_
-
----
-
-## 📚 Referensi
+## Referensi
 
 1. Ongaro & Ousterhout, "In Search of an Understandable Consensus Algorithm" (Raft Paper)
 2. Tanenbaum & Van Steen, "Distributed Systems: Principles and Paradigms"
